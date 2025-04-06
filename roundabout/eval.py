@@ -11,9 +11,10 @@ def eval_agent(agent, env, n_sim=10):
         * Compute the sum of rewards in this episode
         * Store the sum of rewards in the episode_rewards array.
     """
+    print(f"Evaluating agent {n_sim} times")
     env_copy = deepcopy(env)
     episode_rewards = np.zeros(n_sim)
-    for i in tqdm(range(n_sim)):
+    for i in range(n_sim):
         #print(i)
         state, _ = env_copy.reset()
         reward_sum = 0

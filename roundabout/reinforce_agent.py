@@ -51,11 +51,11 @@ class REINFORCE_SKELETON:
             G = rewards[T-t-1] + gamma * G
             full_gamma /= gamma
             returns_list.append(full_gamma * G)
-        return torch.tensor(returns_list[::-1])#, dtype=torch.float32)
+        return torch.tensor(returns_list[::-1], dtype=torch.float32)
 
     def update(self, state, action, reward, terminated, next_state):
         self.current_episode.append((
-            torch.tensor(state).unsqueeze(0),
+            torch.tensor(state).flatten().unsqueeze(0),
             torch.tensor([[action]], dtype=torch.int64),
             torch.tensor([reward]),
         )
@@ -69,7 +69,6 @@ class REINFORCE_SKELETON:
             )
 
             current_episode_returns = self._gradient_returns(rewards, self.gamma)
-
             unn_log_probs = self.policy_net.forward(states)
             log_probs = unn_log_probs - torch.log(torch.sum(torch.exp(unn_log_probs), dim=1)).unsqueeze(1)
 

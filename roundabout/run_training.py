@@ -2,9 +2,10 @@ import gymnasium as gym
 import numpy as np
 import highway_env
 
-
 from reinforce_agent import  REINFORCE_SKELETON
 from eval import eval_agent
+from train import train
+
 env = gym.make("roundabout-v0", render_mode='rgb_array')
 
 action_space = env.action_space
@@ -24,9 +25,9 @@ agent = REINFORCE_SKELETON(
 N_episodes = 300
 
 
-print("mean reward before training = ", np.mean(eval_agent(agent, env, 200)))
+#print("mean reward before training = ", np.mean(eval_agent(agent, env, 10)))
 # Run the training loop
-#train(env, agent, N_episodes, eval_every=50,)
+train(env, agent, N_episodes, eval_every=50,)
 
 # Evaluate the final policy
-print("mean reward after training = ", np.mean(eval_agent(agent, env, 200)))
+print("mean reward after training = ", np.mean(eval_agent(agent, env, 100)))

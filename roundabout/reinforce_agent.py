@@ -21,7 +21,7 @@ class Net(nn.Module):
         return self.net(x)
 
 
-class REINFORCE_SKELETON:
+class REINFORCE:
     def __init__(
         self,
         action_space,
@@ -53,7 +53,7 @@ class REINFORCE_SKELETON:
             returns_list.append(full_gamma * G)
         return torch.tensor(returns_list[::-1], dtype=torch.float32)
 
-    def update(self, state, action, reward, terminated, next_state):
+    '''def update(self, state, action, reward, terminated, next_state):
         self.current_episode.append((
             torch.tensor(state).flatten().unsqueeze(0),
             torch.tensor([[action]], dtype=torch.int64),
@@ -80,8 +80,73 @@ class REINFORCE_SKELETON:
 
             self.optimizer.zero_grad()
             full_neg_score.backward()
-            self.optimizer.step()
+            self.optimizer.step()'''
     
+
+    '''def update(self, state, action, reward, terminated, next_state):
+        self.current_episode.append((
+            torch.tensor(state).flatten().unsqueeze(0),
+            torch.tensor([[action]], dtype=torch.int64),
+            torch.tensor([reward]),
+        )
+        )
+
+        if terminated:
+            self.n_eps += 1
+
+            states, actions, rewards = tuple(
+                [torch.cat(data) for data in zip(*self.current_episode)]
+            )
+
+            current_episode_returns = self._gradient_returns(rewards, self.gamma)
+
+            unn_log_probs = self.policy_net.forward(states)
+            log_probs = unn_log_probs - torch.log(torch.sum(torch.exp(unn_log_probs), dim=1)).unsqueeze(1)
+            self.scores.append(torch.dot(log_probs.gather(1, actions).squeeze(), current_episode_returns).unsqueeze(0))
+            self.current_episode = []
+
+            if (self.n_eps % self.episode_batch_size)==0:
+                self.optimizer.zero_grad()
+                full_neg_score = - torch.cat(self.scores).sum() / self.episode_batch_size
+                full_neg_score.backward()
+                self.optimizer.step()
+                
+                self.scores = []'''
+
+    def update(self, state, action, reward, terminated, next_state):
+        """
+        ** SOLUTION **
+        """
+        
+        self.current_episode.append((
+            torch.tensor(state).flatten().unsqueeze(0),
+            torch.tensor([[action]], dtype=torch.int64),
+            torch.tensor([reward]),
+        )
+        )
+
+        if terminated:
+            self.n_eps += 1
+
+            states, actions, rewards = tuple(
+                [torch.cat(data) for data in zip(*self.current_episode)]
+            )
+
+            current_episode_returns = self._gradient_returns(rewards, self.gamma)
+            current_episode_returns = (current_episode_returns - current_episode_returns.mean())
+
+            unn_log_probs = self.policy_net.forward(states)
+            log_probs = unn_log_probs - torch.log(torch.sum(torch.exp(unn_log_probs), dim=1)).unsqueeze(1)
+            self.scores.append(torch.dot(log_probs.gather(1, actions).squeeze(), current_episode_returns).unsqueeze(0))
+            self.current_episode = []
+
+            if (self.n_eps % self.episode_batch_size)==0:
+                self.optimizer.zero_grad()
+                full_neg_score = - torch.cat(self.scores).sum() / self.episode_batch_size
+                full_neg_score.backward()
+                self.optimizer.step()
+                
+                self.scores = []
 
     def get_action(self, state, epsilon=None):
 

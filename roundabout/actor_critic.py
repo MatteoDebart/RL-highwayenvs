@@ -20,8 +20,21 @@ class Net(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class Net2(nn.Module):
+    def __init__(self, obs_size, hidden_size, n_actions):
+        super(Net2, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(obs_size, hidden_size),  # First hidden layer
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),  # Additional hidden layer
+            nn.ReLU(),
+            nn.Linear(hidden_size, n_actions),  # Output layer
+        )
 
-class REINFORCE:
+    def forward(self, x):
+        return self.net(x)
+
+class ActorCritic:
     def __init__(
         self,
         action_space,
@@ -34,7 +47,6 @@ class REINFORCE:
         self.observation_space = observation_space
         self.gamma = gamma
 
-        self.episode_batch_size = episode_batch_size
         self.learning_rate = learning_rate
 
         self.reset()
@@ -59,31 +71,50 @@ class REINFORCE:
             torch.tensor(state).flatten().unsqueeze(0),
             torch.tensor([[action]], dtype=torch.int64),
             torch.tensor([reward]),
+            torch.tensor(next_state).flatten(0).unsqueeze(0)
         )
         )
 
         if terminated:
             self.n_eps += 1
 
-            states, actions, rewards = tuple(
+            states, actions, rewards, next_states = tuple(
                 [torch.cat(data) for data in zip(*self.current_episode)]
             )
 
-            current_episode_returns = self._gradient_returns(rewards, self.gamma)
-            current_episode_returns = (current_episode_returns - current_episode_returns.mean())
+            state_values = self.value_net.forward(states).squeeze()
+            next_state_values = self.value_net.forward(next_states).squeeze()
 
-            unn_log_probs = self.policy_net.forward(states)
-            log_probs = unn_log_probs - torch.log(torch.sum(torch.exp(unn_log_probs), dim=1)).unsqueeze(1)
-            self.scores.append(torch.dot(log_probs.gather(1, actions).squeeze(), current_episode_returns).unsqueeze(0))
+            # Compute TD error for each step
+            td_target = rewards + self.gamma * next_state_values
+            td_error = td_target - state_values
+
+
+            log_probs = self.policy_net.forward(states)
+            log_probs = log_probs - torch.log(torch.sum(torch.exp(log_probs), dim=1)).unsqueeze(1)
+
+            actor_loss = -torch.sum(log_probs.gather(1, actions) * td_error)
+            critic_loss = torch.mean(td_error ** 2) # MSE
+
+
+            self.actor_optimizer.zero_grad()
+            self.critic_optimizer.zero_grad()
+
+            
+
+            actor_loss.backward(retain_graph=True)
+
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), max_norm=1.0)
+
+
+            critic_loss.backward()
+
+            self.actor_optimizer.step()
+            self.critic_optimizer.step()
+
             self.current_episode = []
-
-            if (self.n_eps % self.episode_batch_size)==0:
-                self.optimizer.zero_grad()
-                full_neg_score = - torch.cat(self.scores).sum() / self.episode_batch_size
-                full_neg_score.backward()
-                self.optimizer.step()
-                
-                self.scores = []
+            self.n_eps += 1
 
     def get_action(self, state, epsilon=None):
 
@@ -96,6 +127,8 @@ class REINFORCE:
         return action
 
 
+        return action
+
     def reset(self):
         hidden_size = 128
 
@@ -103,12 +136,16 @@ class REINFORCE:
         n_actions = self.action_space.n
 
         self.policy_net = Net(obs_size, hidden_size, n_actions)
+        self.value_net = Net(obs_size, hidden_size, 1)
 
         self.scores = []
         self.current_episode = []
 
-        self.optimizer = optim.Adam(
+        self.actor_optimizer = optim.Adam(
             params=self.policy_net.parameters(), lr=self.learning_rate
+        )
+        self.critic_optimizer = optim.Adam(
+            params=self.value_net.parameters(), lr=self.learning_rate
         )
 
         self.n_eps = 0

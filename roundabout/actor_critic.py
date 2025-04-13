@@ -114,7 +114,6 @@ class ActorCritic:
             self.critic_optimizer.step()
 
             self.current_episode = []
-            self.n_eps += 1
 
     def get_action(self, state, epsilon=None):
 
@@ -149,3 +148,133 @@ class ActorCritic:
         )
 
         self.n_eps = 0
+
+
+class TDActorCriticBasic:
+    def __init__(
+        self,
+        action_space,
+        observation_space,
+        gamma,
+        actor_learning_rate,
+        critic_learning_rate,
+        writer=None,
+    ):
+        self.action_space = action_space
+        self.observation_space = observation_space
+        self.gamma = gamma
+
+        self.actor_learning_rate = actor_learning_rate
+        self.critic_learning_rate = critic_learning_rate
+
+        self.loss_function = nn.MSELoss()
+        self.writer = writer
+
+        # Network architecture
+        hidden_size = 128
+        obs_size = observation_space.shape[0] * observation_space.shape[1]
+        n_actions = action_space.n
+
+        self.actor = Net(obs_size, hidden_size, n_actions)
+        self.critic = Net(obs_size, hidden_size, 1)
+
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.actor_learning_rate)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.critic_learning_rate)
+
+        self.current_episode = []
+        self.episode_reward = 0
+        self.scores = []
+
+        self.n_eps = 0
+        self.total_steps = 0
+
+    def get_action(self, state, epsilon=None):
+        state_tensor = torch.tensor(state).flatten().unsqueeze(0)
+        with torch.no_grad():
+            logits = self.actor(state_tensor)
+            probs = torch.softmax(logits, dim=1).numpy()[0]
+            return np.random.choice(np.arange(self.action_space.n), p=probs)
+
+    def compute_gradient_score(self):
+        states, actions, rewards, terminals, next_states = tuple(
+            [torch.cat(data) for data in zip(*self.current_episode)]
+        )
+
+        with torch.no_grad():
+            target_values = rewards + self.gamma * (1 - terminals) * self.critic(next_states).squeeze()
+            values = self.critic(states).squeeze()
+            advantages = target_values - values
+
+        logits = self.actor(states)
+        log_probs = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+
+        '''if self.writer:
+            probs = torch.softmax(logits, dim=-1)
+            entropy = -(probs * log_probs).sum(dim=1).mean()
+            self.writer.add_scalar("policy/entropy", entropy.item(), self.n_eps)'''
+
+        discounts = self.gamma ** torch.arange(len(rewards), dtype=torch.float32)
+        weighted_advantages = discounts * advantages
+        selected_log_probs = log_probs.gather(1, actions).squeeze()
+        #print("log probs", selected_log_probs)
+        #print("weighted adv", weighted_advantages)
+        return torch.dot(selected_log_probs.view(-1), weighted_advantages.view(-1)).unsqueeze(0)
+
+    def train_reset(self):
+        self.current_episode = []
+        self.episode_reward = 0
+        self.scores = []
+
+    def update_critic(self, transition):
+        state, _, reward, terminated, next_state = transition
+
+        values = self.critic(state)
+        with torch.no_grad():
+            next_state_values = (1 - terminated) * self.critic(next_state)
+            targets = next_state_values * self.gamma + reward
+
+        loss = self.loss_function(values, targets.unsqueeze(1))
+
+        '''if self.writer:
+            self.writer.add_scalar("loss/critic", loss.item(), self.total_steps)'''
+
+        self.critic_optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
+        self.critic_optimizer.step()
+
+    def update(self, state, action, reward, terminated, next_state):
+        transition = (
+            torch.tensor(state).flatten().unsqueeze(0),
+            torch.tensor([[action]], dtype=torch.int64),
+            torch.tensor([reward], dtype=torch.float32),
+            torch.tensor([terminated], dtype=torch.float32),
+            torch.tensor(next_state).flatten().unsqueeze(0),
+        )
+        self.current_episode.append(transition)
+
+        self.total_steps += 1
+        self.episode_reward += reward
+
+        self.update_critic(transition)
+
+        if terminated:
+            '''if self.writer:
+                self.writer.add_scalar("policy/reward", self.episode_reward, self.n_eps)'''
+
+            self.episode_reward = 0
+            self.n_eps += 1
+
+            self.scores.append(self.compute_gradient_score())
+            self.current_episode = []
+
+            self.actor_optimizer.zero_grad()
+            full_neg_score = -torch.cat(self.scores).sum()
+            full_neg_score.backward()
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
+            self.actor_optimizer.step()
+
+            '''if self.writer:
+                self.writer.add_scalar("loss/actor", full_neg_score.item(), self.n_eps)
+'''
+            self.scores = []

@@ -1,70 +1,79 @@
-import gymnasium  as gym
-import highway_env
+import gymnasium as gym
+import optuna
+import matplotlib.pyplot as plt
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import CheckpointCallback
+from roundabout_reward_wrapper import RoundaboutRewardWrapper
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+import csv
 
+# best param
+study_storage = "stablebaselines_roundabout/roundabout_checkpoints/optuna_study.db"
 
+study = optuna.load_study(study_name="no-name-035cbc85-e68f-446a-b5bd-e7cf79f0936c",
+                          storage=f"sqlite:///{study_storage}")
+best_trial = study.best_trial
+best_params = best_trial.params
+print("Best Hyperparameters from Optuna Study:", best_params)
 
-class RoundaboutRewardWrapper(gym.RewardWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self.entered_roundabout = False
+# --- Callback to track the rewards --- 
+class RewardCallback(BaseCallback):
+    def __init__(self, verbose=0):
+        super(RewardCallback, self).__init__(verbose)
+        self.rewards = []
 
-    def reset(self, **kwargs):
-        self.entered_roundabout = False
-        return self.env.reset(**kwargs)
+    def _on_step(self) -> bool:
+        reward = self.locals.get('rewards', [0])[0]
+        self.rewards.append(reward)
+        return True
+    
+    def get_rewards(self):
+        return self.rewards
 
-    def reward(self, reward):
-        additional_reward = 0
-
-        vehicle = self.env.unwrapped.vehicle
-        lane_index = vehicle.lane_index
-        road = self.env.unwrapped.road
-        lane = road.network.get_lane(lane_index)
-
-        # Detect if entered roundabout
-        if isinstance(lane, highway_env.road.lane.CircularLane):
-            self.entered_roundabout = True
-
-        # Reward exiting the roundabout after entering
-        if isinstance(lane, highway_env.road.lane.StraightLane) and self.entered_roundabout:
-            self.entered_roundabout = False
-            additional_reward += 5
-
-        # Penalize going off road
-        if not vehicle.on_road:
-            additional_reward += 10
-
-        return reward + additional_reward
-
-class CustomWrapper(gym.Wrapper):
-    def __init__(self, env):
-        super().__init__(env)
-
-    def step(self, action):
-        obs, reward, terminated, truncated, info = self.env.step(action)
-        if not self.env.unwrapped.vehicle.on_road:
-            terminated = True
-        return obs, reward, terminated, truncated, info
-
-
+# --- Retrain Model Using Best Hyperparameters ---
 env = gym.make("roundabout-v0")
-env.unwrapped.configure({
-    "duration": 20})
+env.unwrapped.configure({"duration": 20})
 wrapped_env = RoundaboutRewardWrapper(env)
-wrapped_env = CustomWrapper(wrapped_env)
+wrapped_env = DummyVecEnv([lambda: wrapped_env])
+wrapped_env = VecNormalize(wrapped_env, norm_obs=True, norm_reward=True)
 
-checkpoint_callback = CheckpointCallback(
-    save_freq=5_000,
-    save_path="./checkpoints/",
-    name_prefix="ppo_roundabout"
-)
+# Model à entrainer
+model = PPO("MlpPolicy", wrapped_env, verbose=1)
+""", 
+            learning_rate=best_params['learning_rate'],
+            gamma=best_params['gamma'],
+            gae_lambda=best_params['gae_lambda'],
+            clip_range=best_params['clip_range'],
+            ent_coef=best_params['ent_coef'])"""
 
-# Initialize the PPO model with a policy and the environment
-model = PPO("MlpPolicy", wrapped_env, verbose=1, learning_rate=1e-2, n_epochs=30, batch_size=32)
+reward_callback = RewardCallback()
+model.learn(total_timesteps=20_000, callback=reward_callback)
+rewards = reward_callback.get_rewards()
 
-# Train the agent for 10,000 time steps
+# save the rewards
+with open('rewards.csv', 'w', newline='') as csvfile:
+    writer = csv.writer(csvfile)
+    writer.writerow(['Reward'])  # Write header
+    for reward in rewards:
+        writer.writerow([reward])  # Write each reward in a new row
 
-model.learn(total_timesteps=20000, progress_bar=True, callback = checkpoint_callback )
+# --- Plot the Results ---
+# 1. Plotting the Reward Distribution
+plt.figure(figsize=(10, 5))
+plt.hist(rewards, bins=30, color='skyblue', edgecolor='black')
+plt.title("Reward Distribution")
+plt.xlabel("Reward")
+plt.ylabel("Frequency")
+plt.show()
 
-model.save("roundabout_checkpoints/ppo_roundabout_custom_reward")
+# 2. Plotting the Rewards over Training Steps
+plt.figure(figsize=(10, 5))
+plt.plot(rewards)
+plt.title("Rewards Over Training Steps")
+plt.xlabel("Training Steps")
+plt.ylabel("Reward")
+plt.show()
+
+# Save the trained model and environment stats
+model.save("stablebaselines_roundabout/roundabout_checkpoints/ppo_roundabout_custom_reward")
+wrapped_env.save("stablebaselines_roundabout/roundabout_checkpoints/vecnormalize_stats.pkl")
